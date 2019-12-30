@@ -37,13 +37,13 @@ Run a command in a new container from an image
 docker run -it --name jdk8 -d ${IMAGE_NAME}
 ```
 Run a command in a running container 
-```
+```bash
 docker exec -it jdk8 /bin/bash
 
 java -version
 
 echo $PATH
-
+```
 some output like 
 
 ```bash
