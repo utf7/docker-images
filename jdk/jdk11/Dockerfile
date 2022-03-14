@@ -1,20 +1,21 @@
 FROM centos:centos7.9.2009
 
-
-MAINTAINER yechao.chen
-
+MAINTAINER utf7
+ARG WORK_DIR=/opt/apps
+ARG JDK_DOWNLOAD_LOCATION="https://download.java.net/java/GA/jdk11/9/GPL/openjdk-11.0.2_linux-x64_bin.tar.gz"
+ARG JDK_TAR=openjdk-11.0.2_linux-x64_bin.tar.gz
 RUN  \
     set -xeu && \
     ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
     yum install -y vim lsof net-tools bind-utils && \
-    mkdir -p /opt/apps/  && \
-    chmod 755 /opt/apps/ && \
-    cd /opt/apps/ && \
-    wget https://download.java.net/java/GA/jdk11/9/GPL/openjdk-11.0.2_linux-x64_bin.tar.gz /opt/apps/ && \
-    tar -zxvf openjdk-11.0.2_linux-x64_bin.tar.gz && \
-    rm -rf openjdk-11.0.2_linux-x64_bin.tar.gz
+    yum -q clean all && \
+    rm -rf /var/cache/yum && \
+    mkdir -p ${WORK_DIR}/  && \
+    chmod 755 ${WORK_DIR}/ && \
+    curl ${JDK_DOWNLOAD_LOCATION} -o ${WORK_DIR}/${JDK_TAR} && \
+    tar -C ${WORK_DIR} -xzf ${WORK_DIR}/${JDK_TAR} && \
+    rm ${WORK_DIR}/${JDK_TAR}
 
-ENV JAVA_HOME /opt/apps/jdk-11.0.2
+ENV JAVA_HOME ${WORK_DIR}/jdk-11.0.2
 ENV PATH $JAVA_HOME/bin:$PATH
-ENV LANG en_US.UTF-8
-WORKDIR /opt/apps
+WORKDIR ${WORK_DIR}
