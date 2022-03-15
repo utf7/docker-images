@@ -7,7 +7,7 @@ ARG JDK_TAR=zulu11.54.25-ca-jdk11.0.14.1-linux_x64.tar.gz
 RUN  \
     set -xeu && \
     ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
-    yum install -y vim lsof net-tools bind-utils && \
+    yum install -y vim lsof net-tools bind-utils less && \
     yum -q clean all && \
     rm -rf /var/cache/yum && \
     mkdir -p ${WORK_DIR}/  && \
