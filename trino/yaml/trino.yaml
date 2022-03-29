@@ -1,0 +1,414 @@
+# Service for trino
+apiVersion: v1
+kind: Service
+metadata:
+  name: trino
+  namespace: bigdata
+  labels:
+    app: trino
+spec:
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+      name: http
+  clusterIP: None
+  selector:
+    app: trino
+---
+# Service for trino coordinator
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trino
+  namespace: bigdata
+  labels:
+    app: trino
+data:
+  node.properties: |
+    node.environment=test
+    node.data-dir=/data/trino/data
+
+  coordinator.jvm.config: |
+    -server
+    -Xms16G
+    -Xmx16G
+    -XX:-UseBiasedLocking
+    -XX:+UseG1GC
+    -XX:G1HeapRegionSize=32M
+    -XX:+ExplicitGCInvokesConcurrent
+    -XX:+ExitOnOutOfMemoryError
+    -XX:+HeapDumpOnOutOfMemoryError
+    -XX:-OmitStackTraceInFastThrow
+    -XX:ReservedCodeCacheSize=512M
+    -XX:PerMethodRecompilationCutoff=10000
+    -XX:PerBytecodeRecompilationCutoff=10000
+    -Djdk.attach.allowAttachSelf=true
+    -Djdk.nio.maxCachedBufferSize=2000000
+    -verbose:gc
+    -Xlog:gc:file=/data/trino/data/var/log/trino-gc.log:utctime,level,tags:filecount=8,filesize=100M
+    -DHADOOP_USER_NAME=hadoop
+  coordinator.config.properties: |
+    coordinator=true
+    node-scheduler.include-coordinator=false
+    http-server.http.port=8080
+    discovery-server.enabled=true
+    discovery.uri=http://trino-coordinator-0:8080
+    query.low-memory-killer.policy=total-reservation-on-blocked-nodes
+    query.max-execution-time=8m
+    query.max-memory=200GB
+    query.max-memory-per-node=4GB
+    memory.heap-headroom-per-node=4GB
+    query.hash-partition-count=24
+
+  worker.jvm.config: |
+    -server
+    -Xms16G
+    -Xmx16G
+    -XX:-UseBiasedLocking
+    -XX:+UseG1GC
+    -XX:G1HeapRegionSize=32M
+    -XX:+ExplicitGCInvokesConcurrent
+    -XX:+ExitOnOutOfMemoryError
+    -XX:+HeapDumpOnOutOfMemoryError
+    -XX:-OmitStackTraceInFastThrow
+    -XX:ReservedCodeCacheSize=512M
+    -XX:PerMethodRecompilationCutoff=10000
+    -XX:PerBytecodeRecompilationCutoff=10000
+    -Djdk.attach.allowAttachSelf=true
+    -Djdk.nio.maxCachedBufferSize=2000000
+    -verbose:gc
+    -Xlog:gc:file=/data/trino/data/var/log/trino-gc.log:utctime,level,tags:filecount=8,filesize=100M
+    -DHADOOP_USER_NAME=hadoop
+  worker.config.properties: |
+    coordinator=false
+    http-server.http.port=8080
+    discovery.uri=http://trino-coordinator-0.trino.bigdata.svc.utf7.local:8080
+    query.low-memory-killer.policy=total-reservation-on-blocked-nodes
+    query.max-execution-time=8m
+    query.max-memory=200GB
+    query.max-memory-per-node=4GB
+    memory.heap-headroom-per-node=4GB
+    query.hash-partition-count=24
+
+  log.properties: |
+    io.trino=INFO
+
+  run-trino: |
+    #!/bin/bash
+  
+    set -xeuo pipefail
+  
+    set +e
+    grep -s -q 'node.id' /etc/trino/node.properties
+    NODE_ID_EXISTS=$?
+    set -e
+  
+    NODE_ID=""
+    if [[ ${NODE_ID_EXISTS} != 0 ]] ; then
+    NODE_ID="-Dnode.id=${HOSTNAME}"
+    fi
+    mkdir -p /data/trino/data/var/log/
+    exec /usr/lib/trino/bin/launcher run --etc-dir /etc/trino ${NODE_ID} "$@"
+  health-check: |
+    #!/bin/bash
+
+    set -euo pipefail
+
+    function get_property() {
+        grep "^$1=" "$2" | cut -d'=' -f2
+    }
+
+    scheme=http
+    port=8080
+
+    config=/etc/trino/config.properties
+    # prefer to use http even if https is enabled
+    if [ "$(get_property 'http-server.http.enabled' "$config")" == "false" ]; then
+        scheme=https
+        port=$(get_property http-server.https.port "$config")
+    else
+        port=$(get_property http-server.http.port "$config")
+    fi
+
+    endpoint="$scheme://localhost:$port/v1/info"
+
+    # add --insecure to disable certificate verification in curl, in case a self-signed certificate is being used
+    if ! info=$(curl --fail --silent --show-error --insecure "$endpoint"); then
+        echo >&2 "Server is not responding to requests"
+        exit 1
+    fi
+
+    if ! grep -q '"starting":\s*false' <<<"$info" >/dev/null; then
+        echo >&2 "Server is starting"
+        exit 1
+    fi
+  hive.properties: |
+    connector.name=hive
+    hive.metastore.uri=thrift://hivemetastore1:9083
+    hive.config.resources=/etc/hadoop/core-site.xml,/etc/hadoop/hdfs-site.xml
+    hive.allow-drop-table=true
+    hive.allow-rename-table=true
+    hive.allow-add-column=true
+    hive.allow-drop-column=true
+    hive.allow-rename-column=true
+    hive.allow-comment-table=true
+    hive.non-managed-table-writes-enabled=true
+    hive.non-managed-table-creates-enabled=true
+    hive.storage-format=PARQUET
+    hive.metastore-cache-ttl=0s
+    hive.recursive-directories=true
+    hive.parquet.use-column-names=true
+    hive.temporary-staging-directory-enabled=false
+  memory.properties: |
+    connector.name=memory
+  core-site.xml: |
+    <configuration>
+    </configuration>
+  hdfs-site.xml: |
+    <configuration>
+
+
+    </configuration>
+
+---
+# Source: trino/templates/statefulset-coordinator.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: trino-coordinator
+  namespace: bigdata
+  labels:
+    app: trino
+    component: coordinator
+spec:
+  serviceName: trino
+  replicas: 1
+  updateStrategy:
+    type: RollingUpdate
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: trino
+      component: coordinator
+  template:
+    metadata:
+      labels:
+        app: trino
+        component: coordinator
+      annotations:
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8081"
+        prometheus.io/scrape: "true"
+        prometheus.io/service: "trino-coordinator"
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      terminationGracePeriodSeconds: 3
+      containers:
+        - name: trino-coordinator
+          image: "harborhost/bigdata/trino:373"
+          imagePullPolicy: IfNotPresent
+          command: [ "/bin/bash", "-c" ]
+          args:
+            - chmod +x /usr/bin/trino && /usr/lib/trino/bin/run-trino
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - bash
+                  - -c
+                  - /usr/lib/trino/bin/launcher kill
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            #livenessProbe:
+            # httpGet:
+            #  path: /v1/cluster
+            # port: http
+            #readinessProbe:
+            # httpGet:
+            #  path: /v1/cluster
+            # port: http
+          resources:
+            limits:
+              cpu: 12
+              memory: 24G
+            requests:
+              cpu: 4
+              memory: 18G
+          volumeMounts:
+            - name: etc-config
+              mountPath: /etc/trino
+              readOnly: true
+            - name: hadoop-config
+              mountPath: /etc/hadoop
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+      volumes:
+        - name: etc-config
+          configMap:
+            name: trino
+            items:
+              - key: "coordinator.config.properties"
+                path: "config.properties"
+              - key: "coordinator.jvm.config"
+                path: "jvm.config"
+              - key: "log.properties"
+                path: "log.properties"
+              - key: "node.properties"
+                path: "node.properties"
+              - key: "hive.properties"
+                path: "catalog/hive.properties"
+              - key: "memory.properties"
+                path: "catalog/memory.properties"
+        - name: hadoop-config
+          configMap:
+            name: trino
+            items:
+              - key: "core-site.xml"
+                path: "core-site.xml"
+              - key: "hdfs-site.xml"
+                path: "hdfs-site.xml"
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: type
+                    operator: In
+                    values:
+                      - bigdata
+
+      tolerations:
+        - effect: NoSchedule
+          key: type
+          operator: Equal
+          value: bigdata
+---
+
+# Source: trino/templates/statefulset-worker.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: trino-worker
+  namespace: bigdata
+  labels:
+    app: trino
+    component: worker
+spec:
+  serviceName: trino
+  replicas: 2
+  updateStrategy:
+    type: RollingUpdate
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: trino
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: trino
+        component: worker
+      annotations:
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8081"
+        prometheus.io/scrape: "true"
+        prometheus.io/service: "trino-worker"
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      terminationGracePeriodSeconds: 3
+      containers:
+      - name: trino-worker
+        image: "harborhost/bigdata/trino:373"
+        imagePullPolicy: IfNotPresent
+        command: [ "/bin/bash", "-c" ]
+        args:
+          - chmod +x /usr/bin/trino && /usr/lib/trino/bin/run-trino
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - bash
+              - -c
+              - /usr/lib/trino/bin/launcher kill
+        ports:
+          - name: http
+            containerPort: 8080
+            protocol: TCP
+          #livenessProbe:
+          # httpGet:
+          #  path: /v1/cluster
+          # port: http
+          #readinessProbe:
+          # httpGet:
+          #  path: /v1/cluster
+          # port: http
+        resources:
+          limits:
+            cpu: 12
+            memory: 24G
+          requests:
+            cpu: 4
+            memory: 18G
+        volumeMounts:
+          - name: etc-config
+            mountPath: /etc/trino
+            readOnly: true
+          - name: hadoop-config
+            mountPath: /etc/hadoop
+            readOnly: true
+        securityContext:
+          allowPrivilegeEscalation: false
+      volumes:
+        - name: etc-config
+          configMap:
+            name: trino
+            items:
+              - key: "worker.config.properties"
+                path: "config.properties"
+              - key: "worker.jvm.config"
+                path: "jvm.config"
+              - key: "log.properties"
+                path: "log.properties"
+              - key: "node.properties"
+                path: "node.properties"
+              - key: "hive.properties"
+                path: "catalog/hive.properties"
+              - key: "memory.properties"
+                path: "catalog/memory.properties"
+        - name: hadoop-config
+          configMap:
+            name: trino
+            items:
+              - key: "core-site.xml"
+                path: "core-site.xml"
+              - key: "hdfs-site.xml"
+                path: "hdfs-site.xml"
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: type
+                operator: In
+                values:
+                - bigdata
+        
+      tolerations:
+        - effect: NoSchedule
+          key: type
+          operator: Equal
+          value: bigdata
+        
+
+
+---
