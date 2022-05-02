@@ -1,0 +1,4 @@
+arm64v8/centos:centos7.9.2009
+arm64v8/adoptopenjdk:11
+https://www.azul.com/downloads/?version=java-11-lts&os=centos&package=jdk#download-openjdk
+https://adoptopenjdk.net/releases.html?variant=openjdk8&jvmVariant=hotspot
